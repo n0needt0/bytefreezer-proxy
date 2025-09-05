@@ -1,21 +1,17 @@
 ---
-- name: Remove ByteFreezer Proxy service (GPT recommended approach)
+- name: Remove ByteFreezer Proxy service (Docker extraction method)
   hosts: all
   become: yes
   vars:
-    bytefreezer_user: "bytefreezer"
-    bytefreezer_group: "bytefreezer"
     bytefreezer_binary_dest: "/usr/local/bin/bytefreezer-proxy"
     bytefreezer_config_dir: "/etc/bytefreezer-proxy"
     bytefreezer_log_dir: "/var/log/bytefreezer-proxy"
     bytefreezer_service_path: "/etc/systemd/system/bytefreezer-proxy.service"
     bytefreezer_logrotate_path: "/etc/logrotate.d/bytefreezer-proxy"
     bytefreezer_spooling_dir: "/var/spool/bytefreezer-proxy"
-    bytefreezer_home_dir: "/var/lib/bytefreezer-proxy"
     backup_on_remove: "{{ bytefreezer_proxy_backup_on_remove | default(false) }}"
     backup_dir: "{{ bytefreezer_proxy_backup_dir | default('/opt/backups/bytefreezer-proxy') }}"
     remove_spooling_dir: "{{ bytefreezer_proxy_remove_spooling_dir | default(false) }}"
-    remove_user: "{{ bytefreezer_proxy_remove_user | default(true) }}"
 
   pre_tasks:
     - name: Check if service exists
@@ -23,21 +19,12 @@
         path: "{{ bytefreezer_service_path }}"
       register: service_exists
 
-    - name: Check if user exists
-      ansible.builtin.getent:
-        database: passwd
-        key: "{{ bytefreezer_user }}"
-      register: user_exists
-      ignore_errors: yes
-
     - name: Display removal information
       debug:
         msg:
           - "Removing ByteFreezer Proxy service..."
           - "Service exists: {{ service_exists.stat.exists }}"
-          - "User exists: {{ user_exists is succeeded }}"
           - "Backup data: {{ backup_on_remove }}"
-          - "Remove user: {{ remove_user }}"
 
   tasks:
     - name: Stop and disable service
@@ -65,7 +52,6 @@
           "{{ bytefreezer_config_dir }}" \
           "{{ bytefreezer_log_dir }}" \
           "{{ bytefreezer_spooling_dir }}" \
-          "{{ bytefreezer_home_dir }}" \
           2>/dev/null || true
       when: backup_on_remove
       ignore_errors: yes
@@ -96,29 +82,11 @@
         path: "{{ bytefreezer_log_dir }}"
         state: absent
 
-    - name: Remove home directory
-      ansible.builtin.file:
-        path: "{{ bytefreezer_home_dir }}"
-        state: absent
-
     - name: Remove spooling directory (only if explicitly requested)
       ansible.builtin.file:
         path: "{{ bytefreezer_spooling_dir }}"
         state: absent
       when: remove_spooling_dir
-
-    - name: Remove system user
-      ansible.builtin.user:
-        name: "{{ bytefreezer_user }}"
-        state: absent
-        remove: yes
-      when: remove_user and user_exists is succeeded
-
-    - name: Remove system group
-      ansible.builtin.group:
-        name: "{{ bytefreezer_group }}"
-        state: absent
-      when: remove_user and user_exists is succeeded
 
   post_tasks:
     - name: Verify removal
@@ -126,21 +94,13 @@
         path: "{{ bytefreezer_service_path }}"
       register: service_removed
 
-    - name: Check if user still exists
-      ansible.builtin.getent:
-        database: passwd
-        key: "{{ bytefreezer_user }}"
-      register: user_still_exists
-      ignore_errors: yes
-
     - name: Display removal status
       debug:
         msg:
           - "ByteFreezer Proxy removal completed!"
           - "Service removed: {{ not service_removed.stat.exists }}"
           - "Binary removed: {{ bytefreezer_binary_dest }}"
-          - "User removed: {{ user_still_exists is failed and remove_user }}"
-          - "Directories removed: {{ bytefreezer_config_dir }}, {{ bytefreezer_log_dir }}, {{ bytefreezer_home_dir }}"
+          - "Directories removed: {{ bytefreezer_config_dir }}, {{ bytefreezer_log_dir }}"
           - "Spooling directory preserved: {{ bytefreezer_spooling_dir }} (unless remove_spooling_dir=true)"
           - "Backup created: {{ backup_on_remove }}"
 

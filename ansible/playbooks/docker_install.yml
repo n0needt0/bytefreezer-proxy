@@ -1,21 +1,17 @@
 ---
-- name: Install and configure ByteFreezer Proxy service (GPT recommended approach)
+- name: Install and configure ByteFreezer Proxy service (Docker binary extraction)
   hosts: all
   become: yes
   vars:
-    bytefreezer_user: "bytefreezer"
-    bytefreezer_group: "bytefreezer"
     bytefreezer_binary_dest: "/usr/local/bin/bytefreezer-proxy"
     bytefreezer_config_path: "/etc/bytefreezer-proxy/config.yaml"
     bytefreezer_log_dir: "/var/log/bytefreezer-proxy"
     bytefreezer_service_path: "/etc/systemd/system/bytefreezer-proxy.service"
     bytefreezer_logrotate_path: "/etc/logrotate.d/bytefreezer-proxy"
     bytefreezer_spooling_dir: "/var/spool/bytefreezer-proxy"
-    bytefreezer_home_dir: "/var/lib/bytefreezer-proxy"
-    github_repo: "{{ bytefreezer_proxy_github_repo | default('n0needt0/bytefreezer-proxy') }}"
+    github_repo_owner: "{{ bytefreezer_github_repo_owner | default('n0needt0') }}"
     version: "{{ bytefreezer_proxy_version | default('latest') }}"
-    release_url: "https://api.github.com/repos/{{ github_repo }}/releases/latest"
-    binary_name: "bytefreezer-proxy-linux-amd64"
+    container_image: "ghcr.io/{{ github_repo_owner }}/bytefreezer-proxy:{{ version }}"
 
   pre_tasks:
     - name: Check if service already exists
@@ -25,51 +21,50 @@
 
     - name: Fail if service already installed
       fail:
-        msg: "ByteFreezer Proxy service is already installed. Use gpt-remove playbook first."
+        msg: "ByteFreezer Proxy service is already installed. Use docker_remove playbook first."
       when: service_exists.stat.exists
 
+    - name: Verify Docker is installed and running
+      ansible.builtin.service_facts:
+      register: services
+
+    - name: Check if Docker service exists
+      fail:
+        msg: "Docker is not installed or running. Please install Docker first."
+      when: "'docker.service' not in services.ansible_facts.services or services.ansible_facts.services['docker.service'].state != 'running'"
+
+    - name: Test Docker access
+      ansible.builtin.shell: docker info
+      register: docker_test
+      failed_when: docker_test.rc != 0
+
   tasks:
-    - name: Ensure group exists
-      ansible.builtin.group:
-        name: "{{ bytefreezer_group }}"
-        system: true
-      become: yes
-
-    - name: Ensure user exists
-      ansible.builtin.user:
-        name: "{{ bytefreezer_user }}"
-        group: "{{ bytefreezer_group }}"
-        system: true
-        shell: /usr/sbin/nologin
-        home: "{{ bytefreezer_home_dir }}"
-        create_home: yes
-      become: yes
-
-    - name: Set download URL
-      set_fact:
-        download_url: "https://github.com/{{ github_repo }}/releases/{{ 'latest/download' if version == 'latest' else 'download/' + version }}/{{ binary_name }}.tar.gz"
-
-    - name: Create temporary directory for download
+    - name: Create temporary directory
       ansible.builtin.tempfile:
         state: directory
         suffix: bytefreezer
       register: temp_dir
 
-    - name: Download and extract binary
-      ansible.builtin.unarchive:
-        src: "{{ download_url }}"
-        dest: "{{ temp_dir.path }}"
-        remote_src: yes
+    - name: Pull binary from container image
+      ansible.builtin.shell: |
+        docker run --rm -v {{ temp_dir.path }}:/output \
+          {{ container_image }} \
+          sh -c "cp /bytefreezer-proxy /output/"
+      register: docker_extract
+      failed_when: docker_extract.rc != 0
+
+    - name: Verify binary was extracted
+      ansible.builtin.stat:
+        path: "{{ temp_dir.path }}/bytefreezer-proxy"
+      register: extracted_binary
+      failed_when: not extracted_binary.stat.exists
 
     - name: Copy binary to /usr/local/bin
       ansible.builtin.copy:
-        src: "{{ temp_dir.path }}/{{ binary_name }}"
+        src: "{{ temp_dir.path }}/bytefreezer-proxy"
         dest: "{{ bytefreezer_binary_dest }}"
         mode: '0755'
-        owner: root
-        group: root
         remote_src: yes
-      become: yes
 
     - name: Clean up temporary directory
       ansible.builtin.file:
@@ -84,38 +79,30 @@
         group: root
         mode: '0755'
 
-    - name: Ensure runtime/data dir exists
-      ansible.builtin.file:
-        path: "{{ bytefreezer_home_dir }}"
-        state: directory
-        owner: "{{ bytefreezer_user }}"
-        group: "{{ bytefreezer_group }}"
-        mode: "0750"
-
     - name: Ensure log directory exists
       ansible.builtin.file:
         path: "{{ bytefreezer_log_dir }}"
         state: directory
-        owner: "{{ bytefreezer_user }}"
-        group: "{{ bytefreezer_group }}"
-        mode: "0750"
+        owner: root
+        group: root
+        mode: '0755'
 
     - name: Ensure spooling directory exists
       ansible.builtin.file:
         path: "{{ bytefreezer_spooling_dir }}"
         state: directory
-        owner: "{{ bytefreezer_user }}"
-        group: "{{ bytefreezer_group }}"
-        mode: "0750"
+        owner: root
+        group: root
+        mode: '0755'
 
     - name: Generate configuration file
       ansible.builtin.template:
         src: config.yaml.j2
         dest: "{{ bytefreezer_config_path }}"
         owner: root
-        group: "{{ bytefreezer_group }}"
-        mode: '0640'
-
+        group: root
+        mode: '0644'
+ 
     - name: Install logrotate configuration
       ansible.builtin.copy:
         dest: "{{ bytefreezer_logrotate_path }}"
@@ -126,34 +113,18 @@
             compress
             missingok
             notifempty
-            create 0640 {{ bytefreezer_user }} {{ bytefreezer_group }}
+            create 0644 root root
             sharedscripts
             postrotate
               systemctl restart bytefreezer-proxy >/dev/null 2>&1 || true
             endscript
           }
         mode: '0644'
-
+  
     - name: Create systemd service file
-      ansible.builtin.copy:
+      ansible.builtin.template:
+        src: bytefreezer-proxy.service.j2
         dest: "{{ bytefreezer_service_path }}"
-        content: |
-          [Unit]
-          Description=ByteFreezer Proxy
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          User={{ bytefreezer_user }}
-          Group={{ bytefreezer_group }}
-          WorkingDirectory={{ bytefreezer_home_dir }}
-          ExecStart={{ bytefreezer_binary_dest }} --config {{ bytefreezer_config_path }}
-          Restart=on-failure
-          RestartSec=2s
-          LimitNOFILE=65535
-
-          [Install]
-          WantedBy=multi-user.target
         mode: '0644'
       notify: Reload systemd
 
@@ -163,12 +134,7 @@
         enabled: yes
         state: started
         daemon_reload: true
-
-    - name: Clean up temporary directory
-      ansible.builtin.file:
-        path: "{{ temp_dir.path }}"
-        state: absent
-
+  
   post_tasks:
     - name: Display installation status
       debug:
@@ -176,10 +142,9 @@
           - "ByteFreezer Proxy installation completed!"
           - "Binary: {{ bytefreezer_binary_dest }}"
           - "Config: {{ bytefreezer_config_path }}"
-          - "User: {{ bytefreezer_user }}:{{ bytefreezer_group }}"
-          - "Home: {{ bytefreezer_home_dir }}"
           - "Logs: {{ bytefreezer_log_dir }}"
           - "Spooling: {{ bytefreezer_spooling_dir }}"
+          - "Container image: {{ container_image }}"
           - "Service: systemctl status bytefreezer-proxy"
 
   handlers:
