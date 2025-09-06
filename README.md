@@ -1,6 +1,7 @@
 # ByteFreezer Proxy
 
 A UDP data collection proxy that batches and forwards data to bytefreezer-receiver.
+This proxy is required to collect data internal to your network efficiently via UDP, and forward it effectively via TCP.
 
 ## Overview
 
@@ -50,10 +51,13 @@ chmod +x bytefreezer-proxy
 ```bash
 # Clone repository
 git clone https://github.com/n0needt0/bytefreezer-proxy.git
-cd bytefreezer-proxy/ansible
+cd bytefreezer-proxy/ansible/playbooks
 
-# Configure inventory and run
-ansible-playbook -i inventory.yml playbooks/install.yml
+# Configure inventory and run install playbook
+ansible-playbook -i inventory.yml install.yml
+
+# Remove service (when needed)
+ansible-playbook -i inventory.yml remove.yml
 ```
 
 **Docker Compose:**
@@ -75,13 +79,19 @@ services:
 
 ## Architecture
 
+
+
 ```
+these are example mappings.
+
 Syslog Sources---udp:2056--\
                             \
 eBPF Data-------udp:2057-----> bytefreezer-proxy --HTTP--> bytefreezer-receiver
                             /
 App Logs--------udp:2058---/
 ```
+
+*These are example mappings - configure any data type on any port via `config.yaml`*
 
 The proxy follows the same architectural patterns as bytefreezer-receiver:
 - `api/` - HTTP API handlers and routing
